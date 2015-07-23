@@ -1,0 +1,130 @@
+import com.wiredforcode.gradle.spawn.*
+
+buildscript {
+    repositories {
+        jcenter()
+        maven { url 'http://dl.bintray.com/vermeulen-mp/gradle-plugins' }
+    }
+    dependencies {
+        classpath 'com.moowork.gradle:gradle-node-plugin:0.10'
+        classpath 'com.wiredforcode:gradle-spawn-plugin:0.6.0'
+    }
+}
+
+apply plugin: 'idea'
+apply plugin: 'java'
+apply plugin: 'groovy'
+apply plugin: 'com.moowork.node'
+apply plugin: 'com.wiredforcode.spawn'
+
+group = "com.hugheba"
+version = "1.0.0"
+description = "Sample Gradle Application"
+
+ext {
+    seleniumServerPort = 4444
+}
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+sourceSets {
+    selenese
+}
+
+dependencies {
+    //testRuntime 'org.seleniumhq.selenium:selenium-server-standalone:2.46.0' // Need for testWebdriverIo
+    testRuntime 'jp.vmi:selenese-runner-java:1.11.0' // Need for testSelenese
+}
+
+task wrapper(type: Wrapper) {
+    gradleVersion = '2.5'
+}
+
+/**
+ * Install NodeJS Test Dependencies
+ */
+task installNodeTestDeps(type: NpmTask) {
+    args = [
+            'install', '--prefix', './',
+            'grunt', 'mocha', 'selenium-standalone', 'selenium-webdriver', 'phantomjs', 'phantomjs-server', 'webdriverio'
+    ]
+}
+installNodeTestDeps.doFirst {
+    println "Cleaning node_modules"
+    ant.exec failOnError: true, executable: "rm", {
+        arg value: "-Rf"
+        arg value: "${rootDir.absolutePath}/node_modules"
+    }
+}
+installNodeTestDeps.doLast {
+    println "Installing Selenium Standalone"
+    tasks.installSeleniumStandalone.execute()
+}
+
+task installSeleniumStandalone(type: Exec) {
+    commandLine = ["${rootDir.absolutePath}/node_modules/.bin/selenium-standalone"]
+    args = [
+            'install'//, '--version=2.4.5'//, '--baseURL=http://selenium-release.storage.googleapis.com'
+    ]
+}
+
+task prepareReportDirectories<< {
+    ant.mkdir dir: "${rootDir.absolutePath}/build/reports/selenese"
+    ant.mkdir dir: "${rootDir.absolutePath}/build/reports/wdio"
+}
+
+/**
+ * Start/Stop Selenium Standalone
+ */
+task startSeleniumStandalone(dependsOn: ['installNodeTestDeps', 'stopSeleniumStandalone'], type: SpawnProcessTask) {
+    command "${rootDir.absolutePath}/node_modules/.bin/selenium-standalone start &" +
+            "${rootDir.absolutePath}/node_modules/.bin/phantomjs --webdriver=4445 -webdriver-selenium-grid-hub=http://127.0.0.1:4444 &"
+    ready 'Selenium started'
+}
+task stopSeleniumStandalone(type: KillProcessTask)
+
+/**
+ * Run Selenium HTML Script tests
+ **/
+task testSelenese(dependsOn: ['installNodeTestDeps', 'prepareReportDirectories'], type: JavaExec) {
+    main = 'jp.vmi.selenium.selenese.Main'
+    classpath = sourceSets.test.runtimeClasspath
+    args = [
+            '-H',
+            '--phantomjs', 'node_modules/.bin/phantomjs',
+            '--xml-result', 'build/reports/selenese',
+            '--html-result', 'build/reports/selenese/',
+            'src/test/selenium/gradle-demo.html'
+    ]
+}
+
+/**
+ * Run WebdriverIO/WebdriverJS Tests
+ *
+ * Configure WDIO by '$> cd src/test/resources' and  running '$> ../../../node_modules/.bin/wdio config'
+ * - Where do you want to execute your tests? I have my own Selenium cloud
+ * - What is the IP or URI to your selenium standalone server? 127.0.0.1
+ * - What is the port which your selenium standalone server is running on? 4444 (See ext.seleniumServerPort variable)
+ * - Which framework do you want to use? mocha
+ * - Where are your test specs located? ./src/test/wdio/**&#47*.js
+ * - In which directory should the xunit reports get stored? build/reports/wdio
+ * - Level of logging verbosity (silent, verbose, command, data, result, error): result
+ * - In which directory should screenshots gets saved if a command fails? build/reports/errorShots
+ * - What is the base url? http://localhost
+ **/
+task testWebdriverIo(dependsOn: ['prepareReportDirectories', 'startSeleniumStandalone'], type: org.gradle.api.tasks.Exec) {
+    /*commandLine = ['node_modules/.bin/wdio']
+    args = [
+            "${rootDir.absolutePath}/src/test/resources/wdio.conf.js"
+    ]*/
+    commandLine = ['node']
+        args = [
+                "${rootDir.absolutePath}/src/test/wdio/wdio-sample-test.js"
+        ]
+    doLast {
+        tasks.stopSeleniumStandalone.execute()
+    }
+}
